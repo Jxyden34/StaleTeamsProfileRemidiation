@@ -1,0 +1,109 @@
+# ============================================================
+# CI Pipeline — Stale Profile Remediation
+# University of Huddersfield | Jayden Hindley
+#
+# Triggers on every push and pull request to any branch.
+# Two automated gates must pass before code is considered
+# ready for deployment to Intune:
+#   1. PSScriptAnalyzer  — code quality and best practice
+#   2. Pester            — unit tests with mocked CIM responses
+#
+# The pipeline runs on a Windows runner because the scripts
+# are PowerShell and PSScriptAnalyzer rules are platform-aware.
+# ============================================================
+
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint-and-test:
+    name: PSScriptAnalyzer and Pester
+    runs-on: windows-latest
+
+    steps:
+
+      # -------------------------------------------------------
+      # Step 1 — Check out the repository
+      # Makes all files in the repo available to the runner.
+      # -------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # Step 2 — PSScriptAnalyzer
+      # Scans both scripts for code quality issues, deprecated
+      # cmdlets, security warnings and style violations.
+      # The build fails if any Warning or Error severity issue
+      # is found. This ensures only clean code progresses.
+      # -------------------------------------------------------
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Write-Host "Installing PSScriptAnalyzer..."
+          Install-Module PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
+
+          Write-Host "Analysing scripts..."
+          $results = Invoke-ScriptAnalyzer `
+            -Path ./scripts `
+            -Recurse `
+            -Severity @('Warning', 'Error') `
+            -ExcludeRule PSAvoidUsingWriteHost
+
+          if ($results) {
+            Write-Host ""
+            Write-Host "PSScriptAnalyzer found the following issues:" -ForegroundColor Red
+            $results | Format-Table -AutoSize
+            Write-Host "Build failed. Resolve the issues above before merging." -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host "PSScriptAnalyzer passed. No issues found." -ForegroundColor Green
+
+      # -------------------------------------------------------
+      # Step 3 — Pester Tests
+      # Runs the full Pester test suite from the /tests folder.
+      # Tests mock Win32_UserProfile CIM responses so they run
+      # without needing a physical managed device.
+      # The build fails if any test fails.
+      # -CI flag ensures a non-zero exit code on failure,
+      # which GitHub Actions will catch as a pipeline failure.
+      # -------------------------------------------------------
+      - name: Run Pester Tests
+        shell: pwsh
+        run: |
+          Write-Host "Installing Pester..."
+          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser
+
+          Write-Host "Running tests..."
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = './tests/results/TestResults.xml'
+          $config.TestResult.OutputFormat = 'NUnitXml'
+
+          Invoke-Pester -Configuration $config
+
+      # -------------------------------------------------------
+      # Step 4 — Publish Test Results
+      # Uploads the Pester NUnit XML results so they appear
+      # in the GitHub Actions test summary tab.
+      # This gives a clear pass/fail view per test case.
+      # Only runs if the test step ran (even if it failed).
+      # -------------------------------------------------------
+      - name: Publish Test Results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Pester Test Results
+          path: ./tests/results/TestResults.xml
+          reporter: java-junit
+          fail-on-error: true
