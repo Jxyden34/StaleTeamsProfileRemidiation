@@ -38,10 +38,9 @@ jobs:
 
       # -------------------------------------------------------
       # Step 2 — PSScriptAnalyzer
-      # Scans both scripts for code quality issues, deprecated
-      # cmdlets, security warnings and style violations.
-      # The build fails if any Warning or Error severity issue
-      # is found. This ensures only clean code progresses.
+      # Scans scripts/ for code quality issues.
+      # Only runs if the scripts/ folder contains .ps1 files.
+      # The build fails if any Warning or Error is found.
       # -------------------------------------------------------
       - name: Run PSScriptAnalyzer
         shell: pwsh
@@ -49,7 +48,13 @@ jobs:
           Write-Host "Installing PSScriptAnalyzer..."
           Install-Module PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
 
-          Write-Host "Analysing scripts..."
+          $scripts = Get-ChildItem -Path ./scripts -Recurse -Filter *.ps1 -ErrorAction SilentlyContinue
+          if (-not $scripts) {
+            Write-Host "No scripts found in /scripts — skipping PSScriptAnalyzer." -ForegroundColor Yellow
+            exit 0
+          }
+
+          Write-Host "Analysing $($scripts.Count) script(s)..."
           $results = Invoke-ScriptAnalyzer `
             -Path ./scripts `
             -Recurse `
@@ -68,20 +73,27 @@ jobs:
 
       # -------------------------------------------------------
       # Step 3 — Pester Tests
-      # Runs the full Pester test suite from the /tests folder.
-      # Tests mock Win32_UserProfile CIM responses so they run
-      # without needing a physical managed device.
-      # The build fails if any test fails.
-      # -CI flag ensures a non-zero exit code on failure,
-      # which GitHub Actions will catch as a pipeline failure.
+      # Only runs if test files exist in /tests.
+      # Skips cleanly if no tests have been written yet.
+      # Once tests exist, the build fails if any test fails.
       # -------------------------------------------------------
       - name: Run Pester Tests
+        id: pester
         shell: pwsh
         run: |
+          $testFiles = Get-ChildItem -Path ./tests -Recurse -Filter *.Tests.ps1 -ErrorAction SilentlyContinue
+          if (-not $testFiles) {
+            Write-Host "No Pester test files found in /tests — skipping test run." -ForegroundColor Yellow
+            echo "tests_ran=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
           Write-Host "Installing Pester..."
           Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser
 
-          Write-Host "Running tests..."
+          Write-Host "Found $($testFiles.Count) test file(s). Running tests..."
+          New-Item -ItemType Directory -Path ./tests/results -Force | Out-Null
+
           $config = New-PesterConfiguration
           $config.Run.Path = './tests'
           $config.Run.Exit = $true
@@ -91,17 +103,16 @@ jobs:
           $config.TestResult.OutputFormat = 'NUnitXml'
 
           Invoke-Pester -Configuration $config
+          echo "tests_ran=true" >> $env:GITHUB_OUTPUT
 
       # -------------------------------------------------------
       # Step 4 — Publish Test Results
-      # Uploads the Pester NUnit XML results so they appear
-      # in the GitHub Actions test summary tab.
-      # This gives a clear pass/fail view per test case.
-      # Only runs if the test step ran (even if it failed).
+      # Only runs if Pester actually ran and produced a results
+      # file. Skipped automatically when no tests exist yet.
       # -------------------------------------------------------
       - name: Publish Test Results
         uses: dorny/test-reporter@v1
-        if: always()
+        if: steps.pester.outputs.tests_ran == 'true' && always()
         with:
           name: Pester Test Results
           path: ./tests/results/TestResults.xml
