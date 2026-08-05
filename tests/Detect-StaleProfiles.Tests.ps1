@@ -13,7 +13,7 @@ BeforeAll {
     # Load the detection script so its functions are available
     # to test. The script must not execute automatically on
     # dot-source — all logic should be inside functions.
-    . "$PSScriptRoot/../scripts/Detect-StaleProfiles.ps1"
+    . (Join-Path -Path $PSScriptRoot -ChildPath "../detection/Detection5.ps1")
 }
 
 # ============================================================
