@@ -1,11 +1,4 @@
-﻿<#
-Detect stale local user profiles
-Exit 1 = remediation needed
-Exit 0 = compliant
-#>
-
 $StaleDays = 90
-$MinProfileAgeDays = 90
 $UserRoot = "C:\Users"
 
 $ExcludeProfileNames = @(
@@ -14,91 +7,53 @@ $ExcludeProfileNames = @(
     "Public",
     "All Users",
     "Administrator",
-    "enroll-Office365"
+    "enroll-Office365",
+    "DefaultAppPool"
 )
 
-$now = Get-Date
-$staleCutoff = $now.AddDays(-$StaleDays)
-$minAgeCutoff = $now.AddDays(-$MinProfileAgeDays)
+function Get-StaleProfiles {
+    param (
+        [int]$ThresholdDays = $StaleDays
+    )
 
-function Convert-WmiDate {
-    param ([string]$WmiDate)
+    $staleCutoff = (Get-Date).AddDays(-$ThresholdDays)
 
-    if ([string]::IsNullOrWhiteSpace($WmiDate)) {
-        return $null
+    $profiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
+        $_.Special -eq $false -and
+        $_.Loaded -eq $false -and
+        $_.LocalPath -like "$UserRoot\*"
     }
 
-    try {
-        return [Management.ManagementDateTimeConverter]::ToDateTime($WmiDate)
-    }
-    catch {
-        return $null
-    }
-}
+    $staleProfiles = @()
 
-Write-Output "Stale cutoff: $staleCutoff"
-Write-Output "Minimum age cutoff: $minAgeCutoff"
+    foreach ($p in $profiles) {
+        $profileName = Split-Path -Path $p.LocalPath -Leaf
+        if ($ExcludeProfileNames -contains $profileName) {
+            continue
+        }
 
-$profiles = Get-CimInstance Win32_UserProfile | Where-Object {
-    $_.Special -eq $false -and
-    $_.Loaded -eq $false -and
-    $_.LocalPath -like "$UserRoot\*"
-}
-
-$staleProfiles = @()
-
-foreach ($p in $profiles) {
-
-    if (-not (Test-Path $p.LocalPath)) {
-        Write-Output "Skipping missing path: $($p.LocalPath)"
-        continue
-    }
-
-    $profileName = Split-Path $p.LocalPath -Leaf
-
-    if ($ExcludeProfileNames -contains $profileName) {
-        Write-Output "Skipping excluded profile: $profileName"
-        continue
-    }
-
-    $lastUse = Convert-WmiDate $p.LastUseTime
-    $created = (Get-Item $p.LocalPath).CreationTime
-
-    Write-Output "`nProfile: $profileName"
-    Write-Output "Created: $created"
-    Write-Output "LastUseTime: $lastUse"
-
-    # Ensure profile isn't too new
-    if ($created -gt $minAgeCutoff) {
-        Write-Output "→ Too new, skipping"
-        continue
-    }
-
-    if ($lastUse) {
-        if ($lastUse -lt $staleCutoff) {
-            Write-Output "→ Marked STALE (LastUseTime)"
+        $lastUse = $p.LastUseTime
+        if ($lastUse -and $lastUse -lt $staleCutoff) {
             $staleProfiles += $p
         }
-        else {
-            Write-Output "→ Recently used"
-        }
     }
-    else {
-        # No LastUseTime → fall back to creation time
-        if ($created -lt $staleCutoff) {
-            Write-Output "→ Marked STALE (CreationTime fallback)"
-            $staleProfiles += $p
-        }
-        else {
-            Write-Output "→ No LastUseTime but not stale"
-        }
-    }
+
+    return $staleProfiles
 }
 
-if ($staleProfiles.Count -gt 0) {
-    Write-Output "`nFound $($staleProfiles.Count) stale profile(s)"
-    exit 1
+function Get-DetectionExitCode {
+    param (
+        [int]$ThresholdDays = $StaleDays
+    )
+
+    $staleProfiles = Get-StaleProfiles -ThresholdDays $ThresholdDays
+    if ($staleProfiles.Count -gt 0) {
+        return 1
+    }
+
+    return 0
 }
 
-Write-Output "`nNo stale profiles found"
-exit 0
+if ($MyInvocation.InvocationName -ne '.') {
+    exit (Get-DetectionExitCode -ThresholdDays $StaleDays)
+}
