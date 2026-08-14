@@ -69,23 +69,23 @@ if ($toRemove.Count -eq 0) {
 $removed = @()
 $failed  = @()
 
-foreach ($profile in $toRemove) {
+foreach ($userProfile in $toRemove) {
     try {
-        Write-Output "Removing profile: $($profile.LocalPath)"
-        Remove-CimInstance -InputObject $profile -ErrorAction Stop
+        Write-Output "Removing profile: $($userProfile.LocalPath)"
+        Remove-CimInstance -InputObject $userProfile -ErrorAction Stop
 
         $removed += [pscustomobject]@{
-            ProfileName = Split-Path $profile.LocalPath -Leaf
-            LocalPath   = $profile.LocalPath
-            SID         = $profile.SID
+            ProfileName = Split-Path $userProfile.LocalPath -Leaf
+            LocalPath   = $userProfile.LocalPath
+            SID         = $userProfile.SID
             Result      = "Removed"
         }
     }
     catch {
         $failed += [pscustomobject]@{
-            ProfileName = Split-Path $profile.LocalPath -Leaf
-            LocalPath   = $profile.LocalPath
-            SID         = $profile.SID
+            ProfileName = Split-Path $userProfile.LocalPath -Leaf
+            LocalPath   = $userProfile.LocalPath
+            SID         = $userProfile.SID
             Result      = "Failed"
             Error       = $_.Exception.Message
         }
