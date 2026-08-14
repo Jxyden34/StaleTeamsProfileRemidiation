@@ -82,8 +82,8 @@ jobs:
           Write-Host "PSScriptAnalyzer passed. No issues found." -ForegroundColor Green
 
 
-      # -------------------------------------------------------
-      # Step 3 — Pester
+            # -------------------------------------------------------
+      # Step 3 — Pester Tests
       # -------------------------------------------------------
       - name: Run Pester Tests
         id: pester
@@ -100,12 +100,20 @@ jobs:
             exit 0
           }
 
-          Write-Host "Installing Pester..."
+          Write-Host "Installing Pester 5.9.0..."
 
           Install-Module Pester `
+            -RequiredVersion 5.9.0 `
             -Force `
             -SkipPublisherCheck `
             -Scope CurrentUser
+
+          Import-Module Pester `
+            -RequiredVersion 5.9.0 `
+            -Force
+
+          Write-Host "Pester version:"
+          Get-Module Pester | Select-Object Name, Version
 
           Write-Host "Found $($testFiles.Count) test file(s). Running tests..."
 
@@ -117,19 +125,46 @@ jobs:
           $config = New-PesterConfiguration
 
           $config.Run.Path = './tests'
-          $config.Run.Exit = $true
+
+          # Don't immediately kill the PowerShell process.
+          # This lets us print useful failure information first.
+          $config.Run.Exit = $false
+          $config.Run.PassThru = $true
 
           $config.Output.Verbosity = 'Detailed'
 
           $config.TestResult.Enabled = $true
           $config.TestResult.OutputPath = './tests/results/TestResults.xml'
-
-          # IMPORTANT:
-          # dorny/test-reporter uses java-junit,
-          # therefore Pester MUST create JUnit XML.
           $config.TestResult.OutputFormat = 'JUnitXml'
 
-          Invoke-Pester -Configuration $config
+          $result = Invoke-Pester -Configuration $config
+
+          Write-Host ""
+          Write-Host "==============================="
+          Write-Host "       PESTER SUMMARY"
+          Write-Host "==============================="
+          Write-Host "Passed:  $($result.PassedCount)"
+          Write-Host "Failed:  $($result.FailedCount)"
+          Write-Host "Skipped: $($result.SkippedCount)"
+          Write-Host "Result:  $($result.Result)"
+          Write-Host "==============================="
+
+          if ($result.Result -ne 'Passed') {
+
+              Write-Host ""
+              Write-Host "Pester failed." -ForegroundColor Red
+
+              Write-Host ""
+              Write-Host "Container information:" -ForegroundColor Yellow
+
+              $result.Containers |
+                  Where-Object { $_.Result -eq 'Failed' } |
+                  Format-List * -Force
+
+              exit 1
+          }
+
+          Write-Host "All Pester tests passed." -ForegroundColor Green
 
 
       # -------------------------------------------------------
