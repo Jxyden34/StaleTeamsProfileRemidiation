@@ -5,11 +5,8 @@
 # Triggers on every push and pull request to any branch.
 # Two automated gates must pass before code is considered
 # ready for deployment to Intune:
-#   1. PSScriptAnalyzer  — code quality and best practice
-#   2. Pester            — unit tests with mocked CIM responses
-#
-# The pipeline runs on a Windows runner because the scripts
-# are PowerShell and PSScriptAnalyzer rules are platform-aware.
+#   1. PSScriptAnalyzer — code quality and best practice
+#   2. Pester           — unit tests with mocked CIM responses
 # ============================================================
 
 name: CI Pipeline
@@ -22,6 +19,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   lint-and-test:
     name: PSScriptAnalyzer and Pester
@@ -30,31 +31,36 @@ jobs:
     steps:
 
       # -------------------------------------------------------
-      # Step 1 — Check out the repository
-      # Makes all files in the repo available to the runner.
+      # Step 1 — Check out repository
       # -------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # -------------------------------------------------------
       # Step 2 — PSScriptAnalyzer
-      # Scans scripts/ for code quality issues.
-      # Only runs if the scripts/ folder contains .ps1 files.
-      # The build fails if any Warning or Error is found.
       # -------------------------------------------------------
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
           Write-Host "Installing PSScriptAnalyzer..."
-          Install-Module PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
+          Install-Module PSScriptAnalyzer `
+            -Force `
+            -SkipPublisherCheck `
+            -Scope CurrentUser
 
-          $scripts = Get-ChildItem -Path ./scripts -Recurse -Filter *.ps1 -ErrorAction SilentlyContinue
+          $scripts = Get-ChildItem `
+            -Path ./scripts `
+            -Recurse `
+            -Filter *.ps1 `
+            -ErrorAction SilentlyContinue
+
           if (-not $scripts) {
-            Write-Host "No scripts found in /scripts — skipping PSScriptAnalyzer." -ForegroundColor Yellow
+            Write-Host "No scripts found in /scripts - skipping PSScriptAnalyzer." -ForegroundColor Yellow
             exit 0
           }
 
           Write-Host "Analysing $($scripts.Count) script(s)..."
+
           $results = Invoke-ScriptAnalyzer `
             -Path ./scripts `
             -Recurse `
@@ -64,57 +70,76 @@ jobs:
           if ($results) {
             Write-Host ""
             Write-Host "PSScriptAnalyzer found the following issues:" -ForegroundColor Red
+
             $results | Format-Table -AutoSize
+
+            Write-Host ""
             Write-Host "Build failed. Resolve the issues above before merging." -ForegroundColor Red
+
             exit 1
           }
 
           Write-Host "PSScriptAnalyzer passed. No issues found." -ForegroundColor Green
 
+
       # -------------------------------------------------------
-      # Step 3 — Pester Tests
-      # Only runs if test files exist in /tests.
-      # Skips cleanly if no tests have been written yet.
-      # Once tests exist, the build fails if any test fails.
+      # Step 3 — Pester
       # -------------------------------------------------------
       - name: Run Pester Tests
         id: pester
         shell: pwsh
         run: |
-          $testFiles = Get-ChildItem -Path ./tests -Recurse -Filter *.Tests.ps1 -ErrorAction SilentlyContinue
+          $testFiles = Get-ChildItem `
+            -Path ./tests `
+            -Recurse `
+            -Filter *.Tests.ps1 `
+            -ErrorAction SilentlyContinue
+
           if (-not $testFiles) {
-            Write-Host "No Pester test files found in /tests — skipping test run." -ForegroundColor Yellow
-            echo "tests_ran=false" >> $env:GITHUB_OUTPUT
+            Write-Host "No Pester test files found in /tests - skipping test run." -ForegroundColor Yellow
             exit 0
           }
 
           Write-Host "Installing Pester..."
-          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser
+
+          Install-Module Pester `
+            -Force `
+            -SkipPublisherCheck `
+            -Scope CurrentUser
 
           Write-Host "Found $($testFiles.Count) test file(s). Running tests..."
-          New-Item -ItemType Directory -Path ./tests/results -Force | Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path ./tests/results `
+            -Force | Out-Null
 
           $config = New-PesterConfiguration
+
           $config.Run.Path = './tests'
           $config.Run.Exit = $true
+
           $config.Output.Verbosity = 'Detailed'
+
           $config.TestResult.Enabled = $true
           $config.TestResult.OutputPath = './tests/results/TestResults.xml'
-          $config.TestResult.OutputFormat = 'NUnitXml'
+
+          # IMPORTANT:
+          # dorny/test-reporter uses java-junit,
+          # therefore Pester MUST create JUnit XML.
+          $config.TestResult.OutputFormat = 'JUnitXml'
 
           Invoke-Pester -Configuration $config
-          echo "tests_ran=true" >> $env:GITHUB_OUTPUT
+
 
       # -------------------------------------------------------
-      # Step 4 — Publish Test Results
-      # Only runs if Pester actually ran and produced a results
-      # file. Skipped automatically when no tests exist yet.
+      # Step 4 — Publish Pester Test Results
       # -------------------------------------------------------
       - name: Publish Test Results
-        uses: dorny/test-reporter@v1
-        if: steps.pester.outputs.tests_ran == 'true' && always()
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() && hashFiles('tests/results/TestResults.xml') != '' }}
         with:
           name: Pester Test Results
-          path: ./tests/results/TestResults.xml
+          path: tests/results/TestResults.xml
           reporter: java-junit
           fail-on-error: true
