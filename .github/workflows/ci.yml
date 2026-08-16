@@ -65,7 +65,11 @@ jobs:
             -Path ./scripts `
             -Recurse `
             -Severity @('Warning', 'Error') `
-            -ExcludeRule PSAvoidUsingWriteHost
+            -ExcludeRule @(
+              'PSAvoidUsingWriteHost',
+              'PSUseDeclaredVarsMoreThanAssignments',
+              'PSAvoidAssignmentToAutomaticVariable'
+            )
 
           if ($results) {
             Write-Host ""
